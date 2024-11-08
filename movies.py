@@ -27,9 +27,9 @@ REDDIT_URL = os.getenv('REDDIT_URL')
 INSTAGRAM_USERNAME = os.getenv('INSTAGRAM_USERNAME')
 INSTAGRAM_PASSWORD = os.getenv('INSTAGRAM_PASSWORD')
 
-#group_chat_id = '-683964297' # Ladies who Festival
-#group_chat_id = '-1002475527084' # Movies Updatates
-
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
 
 # Initialize bot
 bot = Bot(token=BOT_TOKEN)
@@ -57,8 +57,7 @@ def extract_url(text):
 
 async def get_movie_rating(imdb_url):
     """Fetch movie rating from IMDB."""
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    response = requests.get(imdb_url, headers=headers)
+    response = requests.get(imdb_url, headers=HEADERS)
     soup = BeautifulSoup(response.text, 'html.parser')
     rating_element = soup.find('span', class_='sc-d541859f-1 imUuxf')
     rating = rating_element.text if rating_element else 'N/A'
@@ -67,8 +66,7 @@ async def get_movie_rating(imdb_url):
 async def get_movie_description(imdb_url):
     """Fetch movie description from IMDB."""
     description_url = f"{imdb_url.rstrip('/')}/plotsummary"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    response = requests.get(description_url, headers=headers)
+    response = requests.get(description_url, headers=HEADERS)
     soup = BeautifulSoup(response.text, 'html.parser')
     description_element = soup.find('div', class_='ipc-html-content-inner-div')
     description = description_element.text.strip() if description_element else 'N/A'
