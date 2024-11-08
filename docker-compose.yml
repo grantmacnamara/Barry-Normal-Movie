@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  movie-bot:
+    build: .
+    volumes:
+      - ./.env:/app/.env
+      - ./seen_posts.txt:/app/seen_posts.txt
+    restart: unless-stopped 
