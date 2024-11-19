@@ -8,10 +8,14 @@ import datetime
 import urllib.request
 from bs4 import BeautifulSoup
 from telegram import Bot
-from instagrapi import Client
+
 from urlextract import URLExtract
 import movieposters as mp
 from dotenv import load_dotenv
+
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
 
 # Load environment variables
 load_dotenv()
@@ -24,12 +28,6 @@ SEEN_POSTS_FILE = 'seen_posts.txt'
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
 REDDIT_URL = os.getenv('REDDIT_URL')
-INSTAGRAM_USERNAME = os.getenv('INSTAGRAM_USERNAME')
-INSTAGRAM_PASSWORD = os.getenv('INSTAGRAM_PASSWORD')
-
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-}
 
 # Initialize bot
 bot = Bot(token=BOT_TOKEN)
@@ -37,111 +35,105 @@ bot = Bot(token=BOT_TOKEN)
 # File Management Functions
 def load_seen_posts():
     """Load seen posts from file."""
+    print("\n[DEBUG] Loading seen posts from file...")
     if os.path.exists(SEEN_POSTS_FILE):
         with open(SEEN_POSTS_FILE, 'r') as f:
-            return set(line.strip() for line in f.readlines())
+            posts = set(line.strip() for line in f.readlines())
+            print(f"[DEBUG] Loaded {len(posts)} seen posts")
+            return posts
+    print("[DEBUG] No seen posts file found, creating new set")
     return set()
 
 def save_seen_posts(seen_posts):
     """Save seen posts to file."""
+    print(f"\n[DEBUG] Saving {len(seen_posts)} posts to file...")
     with open(SEEN_POSTS_FILE, 'w') as f:
         for post_id in seen_posts:
             f.write(post_id + '\n')
+    print("[DEBUG] Posts saved successfully")
 
 # URL and Data Extraction Functions
 def extract_url(text):
     """Extract the first URL from text."""
+    print("\n[DEBUG] Extracting URL from text...")
     extractor = URLExtract()
     urls = extractor.find_urls(text)
-    return urls[0] if urls else None
+    result = urls[0] if urls else None
+    print(f"[DEBUG] Extracted URL: {result}")
+    return result
 
-async def get_movie_rating(imdb_url):
-    """Fetch movie rating from IMDB."""
-    response = requests.get(imdb_url, headers=HEADERS)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    rating_element = soup.find('span', class_='sc-d541859f-1 imUuxf')
-    rating = rating_element.text if rating_element else 'N/A'
-    return {'rating': rating}
-
-async def get_movie_description(imdb_url):
-    """Fetch movie description from IMDB."""
-    description_url = f"{imdb_url.rstrip('/')}/plotsummary"
-    response = requests.get(description_url, headers=HEADERS)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    description_element = soup.find('div', class_='ipc-html-content-inner-div')
-    description = description_element.text.strip() if description_element else 'N/A'
-    return {'description': description}
-
-# Social Media Functions
-def upload_post(username, password, image_path, caption):
-    """Upload post to Instagram."""
-    try:
-        client = Client()
-        client.login(username, password)
-        media = client.photo_upload(image_path, caption)
-        print("Instagram Post uploaded successfully")
-        return True
-    except Exception as e:
-        print(f"Error uploading to Instagram: {str(e)}")
-        return False
 
 async def send_message(message, poster_file):
-
-# Send to Telegram
-    await bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
-
-    """Send message to Instagram."""
+    print("\n[DEBUG] Preparing to send message to Telegram...")
+    print(f"[DEBUG] Message length: {len(message)} characters")
+    print(f"[DEBUG] Poster file: {poster_file}")
     try:
-        success = upload_post(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, poster_file, message)
-        if success and os.path.exists(poster_file):
-            os.remove(poster_file)
-            print(f"Deleted poster file: {poster_file}")
-        else:
-            print(f"Failed to delete poster file: {poster_file}")
+ #       await bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
+        print("[DEBUG] Message sent successfully to Telegram")
     except Exception as e:
-        print(f"Error sending message: {str(e)}")
+        print(f"[ERROR] Failed to send message: {str(e)}")
 
 # Reddit Functions
 def fetch_latest_posts():
     """Fetch the latest posts from Reddit."""
+    print("\n[DEBUG] Fetching latest posts from Reddit...")
     try:
         request = urllib.request.Request(REDDIT_URL, headers=HEADERS)
         with urllib.request.urlopen(request) as response:
             data = json.loads(response.read().decode())
-        return data['data']['children']
+        posts = data['data']['children']
+        print(f"[DEBUG] Successfully fetched {len(posts)} posts")
+        return posts
     except Exception as e:
-        print(f"Error fetching Reddit posts: {str(e)}")
+        print(f"[ERROR] Error fetching Reddit posts: {str(e)}")
         return []
 
 async def notify_new_posts(new_posts, seen_posts):
     """Process and notify about new posts."""
+    print(f"\n[DEBUG] Processing {len(new_posts)} new posts...")
     for post in new_posts:
         post_data = post['data']
         title = post_data['title']
         post_id = post_data['id']
+        print(f"\n[DEBUG] Processing post: {title[:50]}...")
+        
         created = post_data['created']
         date = datetime.datetime.fromtimestamp(created)
-        url = extract_url(post_data['selftext'])
-
-        # Handle movie poster
-        film_id = url.split("title/")[1].split("/")[0].strip()
-        poster_url = mp.get_poster(id=film_id)
+        print(f"[DEBUG] Post date: {date}")
         
+        url = extract_url(post_data['selftext'])
+        if not url:
+            print("[DEBUG] No URL found in post, skipping...")
+            continue
+            
+        if "trakt.tv" in url:
+            print("[DEBUG] Trakt.tv URL detected, skipping...")
+            continue
+            
+        if "imdb.com" not in url:
+            print("[DEBUG] Not an IMDB URL, skipping...")
+            continue
+
+        print(f"[DEBUG] Valid IMDB URL found: {url}")
+        print(f"[DEBUG] Extracting film ID from URL: {url}")
+        try:
+            film_id = url.split("title/")[1].split("/")[0].strip()
+            poster_url = mp.get_poster(id=film_id)
+            print(f"[DEBUG] Found poster URL: {poster_url}")
+        except Exception as e:
+            print(f"[ERROR] Failed to get poster: {str(e)}")
+            continue
+        
+        # Handle movie poster
         if not os.path.exists('posters'):
             os.makedirs('posters')
         poster_file = os.path.join('posters', f'{film_id}.jpg')
         urllib.request.urlretrieve(poster_url, poster_file)
 
-        # Get movie details
-        movie_rating = await get_movie_rating(url)
-        movie_description = await get_movie_description(url)
-
         # Prepare and send message
         message = (f"New Film: {title}\n"
                   f"Date: {date}\n"
-                  f"Link: {post_data['selftext']}\n\n"
-                  f"Rating: {movie_rating['rating']}\n\n"
-                  f"{movie_description['description']}")
+                  f"Link: {post_data['selftext']}\n\n")
 
         await send_message(message, poster_file)
         seen_posts.add(post_id)
@@ -157,8 +149,21 @@ async def check_for_new_films(seen_posts):
 # Main Function
 async def main():
     """Main function to poll the Reddit page."""
+    print("\n[DEBUG] Starting Movie News Bot...")
+    print("[DEBUG] Loading configuration...")
+    print(f"[DEBUG] Reddit URL: {REDDIT_URL}")
+    print(f"[DEBUG] Telegram Chat ID: {GROUP_CHAT_ID}")
+    
     seen_posts = load_seen_posts()
-    await check_for_new_films(seen_posts)
+    while True:
+        try:
+            print("\n[DEBUG] Starting new polling cycle...")
+            await check_for_new_films(seen_posts)
+            print("[DEBUG] Sleeping for 30 minutes before next check...")
+            await asyncio.sleep(1800)
+        except Exception as e:
+            print(f"[ERROR] Error in main loop: {str(e)}")
+            await asyncio.sleep(60)  # Wait a minute before retrying
 
 if __name__ == '__main__':
     asyncio.run(main())
