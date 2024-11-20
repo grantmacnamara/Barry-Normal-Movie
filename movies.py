@@ -72,6 +72,7 @@ async def fetch_reddit_posts():
         request = urllib.request.Request(REDDIT_URL, headers=HEADERS)
         with urllib.request.urlopen(request) as response:
             return json.loads(response.read())['data']['children']
+            
     except Exception as e:
         print(f"[ERROR] Failed to fetch posts: {e}")
         return []
@@ -87,7 +88,7 @@ async def main():
             if posts := await fetch_reddit_posts():
                 for post in posts:
                     await process_post(post, seen_posts)
-            
+                    print(f"[INFO] POST: {(post)}")
             print("[INFO] Checking again in 30 minutes...")
             await asyncio.sleep(1800)
             
