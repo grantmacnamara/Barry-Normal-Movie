@@ -50,7 +50,7 @@ async def send_telegram_message(title, date, url):
         print(f"[ERROR] Failed to send {title}: {e}")
 
 async def process_post(post, seen_posts):
-    """Process single Reddit post."""
+    """Process single Reddit post. Return the id in the data dict."""
     post_id = post['data']['id']
     if post_id in seen_posts:
         return False
