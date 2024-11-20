@@ -78,23 +78,19 @@ async def fetch_reddit_posts():
         return []
 
 async def main():
-    """Monitor Reddit for new movie posts."""
+    """Process new movie posts from Reddit."""
     print("[INFO] Starting Movie News Bot...")
     seen_posts = load_seen_posts()
     print(f"[INFO] Loaded {len(seen_posts)} seen posts")
     
-    while True:
-        try:
-            if posts := await fetch_reddit_posts():
-                for post in posts:
-                    await process_post(post, seen_posts)
-                    print(f"[INFO] POST: {(post)}")
-            print("[INFO] Checking again in 30 minutes...")
-            await asyncio.sleep(1800)
-            
-        except Exception as e:
-            print(f"[ERROR] Main loop error: {e}")
-            await asyncio.sleep(60)
+    try:
+        if posts := await fetch_reddit_posts():
+            for post in posts:
+                await process_post(post, seen_posts)
+        print("[INFO] Finished processing posts")
+        
+    except Exception as e:
+        print(f"[ERROR] Main loop error: {e}")
 
 if __name__ == '__main__':
     asyncio.run(main())
