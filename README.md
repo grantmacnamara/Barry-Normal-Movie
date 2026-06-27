@@ -14,6 +14,7 @@ A Python-based bot that automatically aggregates movie news from Reddit and post
 ## Prerequisites
 
 - Python 3.8 or higher
+- Node.js and npm (for PM2)
 - A Telegram Bot Token (obtained from [@BotFather](https://t.me/botfather))
 - A Telegram Group/Channel ID
 - Reddit API access
@@ -29,11 +30,6 @@ A Python-based bot that automatically aggregates movie news from Reddit and post
 
 2. Create and activate a virtual environment:
    ```bash
-   # Windows
-   python -m venv venv
-   venv\Scripts\activate
-
-   # macOS/Linux
    python -m venv venv
    source venv/bin/activate
    ```
@@ -57,6 +53,23 @@ A Python-based bot that automatically aggregates movie news from Reddit and post
    INSTAGRAM_PASSWORD=your_instagram_password
    ```
 
+5. Install PM2 globally and set up the process:
+   ```bash
+   npm install -g pm2
+   ```
+
+6. Start the bot with PM2:
+   ```bash
+   pm2 start start.sh --name barry --interpreter bash
+   pm2 save
+   ```
+
+7. (Optional) Configure PM2 to auto-start on boot:
+   ```bash
+   pm2 startup systemd
+   ```
+   Run the command it outputs to enable the systemd service.
+
 ## Telegram Bot Setup
 
 1. Create a new bot:
@@ -75,12 +88,15 @@ A Python-based bot that automatically aggregates movie news from Reddit and post
 
 ## Usage
 
-1. Start the bot:
-   ```bash
-   python movies.py
-   ```
+The bot runs via `start.sh` under PM2, which loops `movies.py` and restarts it on crash.
 
-2. The bot will:
+- **Start**: `pm2 start start.sh --name barry --interpreter bash`
+- **Stop**: `pm2 stop barry`
+- **Restart**: `pm2 restart barry`
+- **Logs**: `pm2 logs barry`
+- **Save process list** (for reboot persistence): `pm2 save`
+
+The bot will:
    - Monitor specified subreddits for new posts
    - Filter and process relevant content
    - Post updates to Telegram and Instagram
