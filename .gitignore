@@ -5,6 +5,7 @@
 venv/
 env/
 .venv/
+log.txt
 ENV/
 
 # Python cache files
@@ -19,6 +20,12 @@ build/
 
 # Local data files
 seen_posts.txt
+
+# Generated output
+out.txt
+
+# Downloaded poster images
+posters/
 
 # IDE specific files
 .idea/

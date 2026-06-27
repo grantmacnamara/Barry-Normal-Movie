@@ -92,11 +92,11 @@ A Python-based bot that automatically aggregates movie news from Reddit and post
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| BOT_TOKEN | Telegram bot API token | `5555555555:AAHtby6kGqXGNgDuTYM7IeCQ2eUgl_dmhHY` |
-| GROUP_CHAT_ID | Telegram group/channel ID | `-1002475527084` |
-| REDDIT_URL | Reddit JSON feed URL | `https://www.reddit.com/r/movieleaks.json` |
-| INSTAGRAM_USERNAME | Instagram account username | `movieupdates` |
-| INSTAGRAM_PASSWORD | Instagram account password | `yourpassword` |
+| BOT_TOKEN | Telegram bot API token | `your_telegram_bot_token` |
+| GROUP_CHAT_ID | Telegram group/channel ID | `your_group_chat_id` |
+| REDDIT_URL | Reddit RSS feed URL | `https://www.reddit.com/r/movieleaks.rss` |
+| INSTAGRAM_USERNAME | Instagram account username | `your_instagram_username` |
+| INSTAGRAM_PASSWORD | Instagram account password | `your_password` |
 
 ## File Structure
 
