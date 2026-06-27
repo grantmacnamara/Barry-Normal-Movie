@@ -3,6 +3,5 @@ movieposters
 BeautifulSoup4
 urlextract
 requests
-instagrapi
 Pillow
 python-dotenv

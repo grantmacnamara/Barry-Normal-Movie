@@ -1,11 +1,11 @@
 # Movie News Bot
 
-A Python-based bot that automatically aggregates movie news from Reddit and posts updates to Telegram and Instagram. The bot monitors specified subreddits for new movie-related content and shares it with your audience through configured channels.
+A Python-based bot that automatically aggregates movie news from Reddit and posts updates to Telegram. The bot monitors specified subreddits for new movie-related content and shares it with your audience through configured channels.
 
 ## Features
 
 - 🤖 Automated content aggregation from Reddit
-- 📱 Cross-platform posting to Telegram and Instagram
+- 📱 Posting to Telegram
 - 🔄 Duplicate post prevention
 - ⚡ Real-time updates
 - 🔒 Secure credential management
@@ -18,7 +18,6 @@ A Python-based bot that automatically aggregates movie news from Reddit and post
 - A Telegram Bot Token (obtained from [@BotFather](https://t.me/botfather))
 - A Telegram Group/Channel ID
 - Reddit API access
-- Instagram account credentials
 
 ## Installation
 
@@ -48,11 +47,7 @@ A Python-based bot that automatically aggregates movie news from Reddit and post
    # Reddit Settings
    REDDIT_URL=https://www.reddit.com/r/movieleaks.json
 
-   # Instagram Settings
-   INSTAGRAM_USERNAME=your_instagram_username
-   INSTAGRAM_PASSWORD=your_instagram_password
-   ```
-
+    
 5. Install PM2 globally and set up the process:
    ```bash
    npm install -g pm2
@@ -99,7 +94,7 @@ The bot runs via `start.sh` under PM2, which loops `movies.py` and restarts it o
 The bot will:
    - Monitor specified subreddits for new posts
    - Filter and process relevant content
-   - Post updates to Telegram and Instagram
+    - Post updates to Telegram
    - Track posted content to prevent duplicates
 
 ## Configuration
@@ -111,8 +106,7 @@ The bot will:
 | BOT_TOKEN | Telegram bot API token | `your_telegram_bot_token` |
 | GROUP_CHAT_ID | Telegram group/channel ID | `your_group_chat_id` |
 | REDDIT_URL | Reddit RSS feed URL | `https://www.reddit.com/r/movieleaks.rss` |
-| INSTAGRAM_USERNAME | Instagram account username | `your_instagram_username` |
-| INSTAGRAM_PASSWORD | Instagram account password | `your_password` |
+
 
 ## File Structure
 
@@ -149,12 +143,7 @@ movie-news-bot/
    - Ensure bot has admin privileges in the group
    - Check GROUP_CHAT_ID is correct
 
-2. **Instagram login fails**
-   - Verify credentials are correct
-   - Check for Instagram security challenges
-   - Consider using 2FA if required
-
-3. **Missing posts**
+2. **Missing posts**
    - Check seen_posts.txt permissions
    - Verify Reddit URL is accessible
    - Check internet connectivity
@@ -167,7 +156,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Reddit API
 - python-telegram-bot
-- Instabot
 - Python dotenv
 
 
