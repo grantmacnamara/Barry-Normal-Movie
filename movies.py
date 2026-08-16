@@ -189,14 +189,45 @@ async def process_entry(client, entry, seen_posts, seen_imdb):
         return False
     return False
 
+REDDIT_HEADERS = {
+    'User-Agent': USER_AGENT,
+    'Accept': 'application/rss+xml, application/xml;q=0.9, */*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+}
+
+FALLBACK_REDDIT_URLS = [
+    'https://www.reddit.com/r/movieleaks.rss',
+    'https://www.reddit.com/r/movieleaks/.rss',
+]
+
+def _is_login_redirect(response):
+    location = response.headers.get('location', '')
+    return response.status_code in (301, 302, 303, 307, 308) and '/login/' in location
+
 async def fetch_reddit_rss(client):
     for attempt in range(5):
         try:
             response = await client.get(
                 REDDIT_URL,
-                headers={'User-Agent': USER_AGENT},
+                headers=REDDIT_HEADERS,
+                follow_redirects=False,
                 timeout=15.0
             )
+            if _is_login_redirect(response) or response.status_code == 403:
+                print(f"[WARN] {REDDIT_URL} returned {response.status_code}, trying fallback URLs...")
+                for url in FALLBACK_REDDIT_URLS:
+                    if url == REDDIT_URL:
+                        continue
+                    fallback = await client.get(
+                        url,
+                        headers=REDDIT_HEADERS,
+                        follow_redirects=True,
+                        timeout=15.0
+                    )
+                    if not _is_login_redirect(fallback) and fallback.status_code == 200:
+                        print(f"[INFO] Using fallback feed: {url}")
+                        feed = feedparser.parse(fallback.text)
+                        return feed.entries
             response.raise_for_status()
             feed = feedparser.parse(response.text)
             return feed.entries
