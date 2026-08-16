@@ -1,27 +1,98 @@
+import html
 import json
 import asyncio
 import datetime
+import logging
 import re
-import unicodedata
 import random
+import sys
+import time
 from pathlib import Path
 from urlextract import URLExtract
 from dotenv import load_dotenv
-from telegram import Bot
 import os
 import httpx
 import feedparser
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
+log = logging.getLogger('movie_bot')
+
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 CHAT_ID = os.getenv('GROUP_CHAT_ID')
+ALERT_CHAT_ID = os.getenv('ALERT_CHAT_ID') or CHAT_ID
 REDDIT_URL = os.getenv('REDDIT_URL')
 OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 SEEN_POSTS_FILE = Path('seen_posts.txt')
+PENDING_FILE = Path('pending_posts.json')
+OMDB_CACHE_FILE = Path('omdb_cache.json')
+MAX_SEND_ATTEMPTS = 5
 
 USER_AGENT = 'script:BarryNormalMovieBot:v2.0 (by /u/barrynormalmovies)'
 
-bot = Bot(token=BOT_TOKEN)
+POLL_INTERVAL = int(os.getenv('POLL_INTERVAL', '1800'))
+HEARTBEAT_INTERVAL = int(os.getenv('HEARTBEAT_INTERVAL', '86400'))
+CONSECUTIVE_FAILURE_ALERT = 3
+OMDB_CONCURRENCY = 5
+
+URL_EXTRACTOR = URLExtract()
+
+TELEGRAM_API = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
+
+
+class TelegramSendError(Exception):
+    def __init__(self, description, retry_after=None):
+        super().__init__(description)
+        self.retry_after = retry_after
+
+
+def validate_env():
+    required = {
+        'BOT_TOKEN': 'Telegram bot token from @BotFather',
+        'GROUP_CHAT_ID': 'Target Telegram group/channel ID',
+        'REDDIT_URL': 'Reddit RSS feed URL',
+        'OMDB_API_KEY': 'OMDB API key for ratings and genres',
+    }
+    missing = [name for name in required if not os.getenv(name)]
+    if missing:
+        log.error("Missing required environment variables: %s", ', '.join(missing))
+        log.error("Create a .env file — see README for the list of variables.")
+        raise SystemExit(1)
+
+
+async def telegram_send(client, chat_id, text, **kwargs):
+    payload = {'chat_id': chat_id, 'text': text, **kwargs}
+    try:
+        response = await client.post(TELEGRAM_API, json=payload, timeout=30.0)
+    except Exception as e:
+        raise TelegramSendError(f'network error: {e}') from e
+    try:
+        data = response.json()
+    except Exception:
+        raise TelegramSendError(
+            f'bad response ({response.status_code}): {response.text[:200]}'
+        )
+    if not data.get('ok'):
+        params = data.get('parameters') or {}
+        raise TelegramSendError(
+            data.get('description') or f'HTTP {response.status_code}',
+            retry_after=params.get('retry_after'),
+        )
+    return True
+
+
+async def send_status_message(client, message):
+    try:
+        await telegram_send(client, ALERT_CHAT_ID, message)
+        log.info("Status sent: %s", message.splitlines()[0])
+        return True
+    except Exception as e:
+        log.error("Failed to send status message: %s", e)
+        return False
 
 
 def load_seen_data():
@@ -42,8 +113,9 @@ def load_seen_data():
                     seen_imdb.add(imdb_match.group(1))
         return seen_posts, seen_imdb
     except Exception as e:
-        print(f"[WARN] Failed to load seen data: {e}")
+        log.warning("Failed to load seen data: %s", e)
         return set(), set()
+
 
 def save_seen_post(post_id, date_str, title, url, rt_score=None, imdb_rating=None, genre=None):
     try:
@@ -56,108 +128,142 @@ def save_seen_post(post_id, date_str, title, url, rt_score=None, imdb_rating=Non
             parts.append(genre)
         with SEEN_POSTS_FILE.open('a') as f:
             f.write(' | '.join(parts) + '\n')
+        return True
     except Exception as e:
-        print(f"[WARN] Failed to save post: {e}")
+        log.error("Failed to save post: %s", e)
+        return False
+
+
+def load_pending():
+    try:
+        if not PENDING_FILE.exists():
+            return []
+        data = json.loads(PENDING_FILE.read_text())
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        log.warning("Failed to load pending queue: %s", e)
+        return []
+
+
+def save_pending(items):
+    try:
+        PENDING_FILE.write_text(json.dumps(items, indent=2))
+    except Exception as e:
+        log.warning("Failed to save pending queue: %s", e)
+
+
+def load_omdb_cache():
+    try:
+        if OMDB_CACHE_FILE.exists():
+            data = json.loads(OMDB_CACHE_FILE.read_text())
+            return data if isinstance(data, dict) else {}
+    except Exception as e:
+        log.warning("Failed to load OMDB cache: %s", e)
+    return {}
+
+
+def save_omdb_cache(cache):
+    try:
+        OMDB_CACHE_FILE.write_text(json.dumps(cache, indent=2))
+    except Exception as e:
+        log.warning("Failed to save OMDB cache: %s", e)
+
 
 def is_valid_movie_url(text):
-    urls = URLExtract().find_urls(text)
-    for url in urls:
-        if "imdb.com" in url:
+    for url in URL_EXTRACTOR.find_urls(text):
+        if 'imdb.com' in url:
             return url
     return None
+
 
 def extract_imdb_id(url):
     match = re.search(r'/title/(tt\d+)', url)
     return match.group(1) if match else None
 
-def make_rt_slug(title):
-    if not title:
-        return None
-    slug = re.sub(r'\s*[\[\(]\d{4}[\]\)]\s*', '', title)
-    slug = slug.strip()
-    slug = unicodedata.normalize('NFKD', slug)
-    slug = slug.encode('ascii', 'ignore').decode('ascii')
-    slug = slug.replace("'", "").replace(":", "").replace(".", "").replace("-", " ")
-    slug = re.sub(r'[^a-zA-Z0-9]+', '_', slug)
-    slug = slug.strip('_')
-    return slug.lower()
 
-async def scrape_rt_tomatometer(client, title):
-    if not title:
-        return None
-    slug = make_rt_slug(title)
-    if not slug:
-        return None
-    try:
-        url = f"https://www.rottentomatoes.com/m/{slug}"
-        headers = {'User-Agent': USER_AGENT}
-        response = await client.get(url, headers=headers, follow_redirects=True, timeout=10.0)
-        response.raise_for_status()
-        for match in re.finditer(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', response.text, re.DOTALL):
-            data = json.loads(match.group(1))
-            ar = data.get('aggregateRating', {})
-            if isinstance(ar, dict) and ar.get('name') == 'Tomatometer':
-                val = ar.get('ratingValue')
-                if val:
-                    return val + '%'
-        match = re.search(r'(\d+)%","title":"Tomatometer"', response.text)
-        if match:
-            return match.group(1) + '%'
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code != 404:
-            print(f"[WARN] RT scrape error for '{title}' (slug: {slug}): {e}")
-    except Exception as e:
-        print(f"[WARN] Failed to scrape RT for '{title}' (slug: {slug}): {e}")
-    return None
-
-async def fetch_movie_info(client, imdb_id):
+async def fetch_movie_info(client, imdb_id, omdb_cache, omdb_semaphore):
     if not OMDB_API_KEY or not imdb_id:
         return None, None, None
-    try:
-        url = f"https://www.omdbapi.com/?i={imdb_id}&apikey={OMDB_API_KEY}"
-        response = await client.get(url)
-        response.raise_for_status()
-        data = response.json()
-        if data.get('Response') != 'True':
-            return None, None, None
-        genre = data.get('Genre')
-        title = data.get('Title', '')
-        rt_score = await scrape_rt_tomatometer(client, title)
-        imdb_val = data.get('imdbRating')
-        imdb_rating = imdb_val + '/10' if imdb_val and imdb_val != 'N/A' else None
-        return rt_score, imdb_rating, genre
-    except Exception as e:
-        print(f"[WARN] Failed to fetch movie info for {imdb_id}: {e}")
+    if imdb_id in omdb_cache:
+        cached = omdb_cache[imdb_id]
+        return cached.get('rt_score'), cached.get('imdb_rating'), cached.get('genre')
+    async with omdb_semaphore:
+        try:
+            url = f'https://www.omdbapi.com/?i={imdb_id}&apikey={OMDB_API_KEY}'
+            response = await client.get(url, timeout=15.0)
+            response.raise_for_status()
+            data = response.json()
+            if data.get('Response') != 'True':
+                return None, None, None
+            genre = data.get('Genre')
+            rt_score = None
+            for rating in data.get('Ratings', []):
+                if rating.get('Source') == 'Rotten Tomatoes' and rating.get('Value'):
+                    rt_score = rating['Value']
+                    break
+            imdb_val = data.get('imdbRating')
+            imdb_rating = imdb_val + '/10' if imdb_val and imdb_val != 'N/A' else None
+            omdb_cache[imdb_id] = {
+                'rt_score': rt_score,
+                'imdb_rating': imdb_rating,
+                'genre': genre,
+            }
+            save_omdb_cache(omdb_cache)
+            return rt_score, imdb_rating, genre
+        except Exception as e:
+            log.warning("Failed to fetch movie info for %s: %s", imdb_id, e)
     return None, None, None
 
-async def send_telegram_message(title, date, url, rt_score=None, imdb_rating=None, genre=None):
-    date_str = date.strftime('%d %b %Y') if isinstance(date, datetime.datetime) else str(date)
-    message = f"🎬 {title}\n📅 {date_str}"
+
+def build_message(title, date_str, url, rt_score, imdb_rating, genre):
+    lines = [f"🎬 {html.escape(title)}", f"📅 {html.escape(date_str)}"]
     if genre:
-        message += f"\n🏷 {genre}"
+        lines.append(f"🏷 {html.escape(str(genre))}")
     if rt_score:
-        message += f"\n🍅 {rt_score}"
+        lines.append(f"🍅 {html.escape(str(rt_score))}")
     if imdb_rating:
-        message += f"\n⭐ {imdb_rating}"
-    message += f"\n🔗 {url}"
+        lines.append(f"⭐ {html.escape(str(imdb_rating))}")
+    lines.append(f"🔗 {html.escape(url)}")
+    return "\n".join(lines)
+
+
+async def send_telegram_message(client, title, date, url, rt_score=None, imdb_rating=None, genre=None):
+    date_str = date.strftime('%d %b %Y') if isinstance(date, datetime.datetime) else str(date)
+    message = build_message(title, date_str, url, rt_score, imdb_rating, genre)
     try:
-        await bot.send_message(chat_id=CHAT_ID, text=message)
-        print(f"[INFO] Sent: {title}")
+        await telegram_send(
+            client,
+            CHAT_ID,
+            message,
+            parse_mode='HTML',
+            disable_web_page_preview=True,
+        )
+        log.info("Sent: %s", title)
         return True
-    except Exception as e:
-        print(f"[ERROR] Failed to send {title}: {e}")
-        err_str = str(e)
-        if 'Flood control exceeded' in err_str:
-            match = re.search(r'Retry in (\d+) seconds', err_str)
-            wait = int(match.group(1)) + 2 if match else 30
-            print(f"[INFO] Waiting {wait}s for flood control...")
+    except TelegramSendError as e:
+        log.error("Failed to send %s: %s", title, e)
+        wait = None
+        if e.retry_after:
+            wait = int(e.retry_after) + 2
+        else:
+            match = re.search(r'Retry in (\d+) seconds', str(e))
+            if match:
+                wait = int(match.group(1)) + 2
+        if wait:
+            log.info("Waiting %ds for flood control...", wait)
             await asyncio.sleep(wait)
         return False
+    except Exception as e:
+        log.error("Failed to send %s: %s", title, e)
+        return False
 
-async def process_entry(client, entry, seen_posts, seen_imdb):
+
+async def process_entry(client, entry, seen_posts, seen_imdb, pending, omdb_cache, omdb_semaphore):
     post_id = entry.get('id', '').split('_')[-1]
     if not post_id or post_id in seen_posts:
-        return False
+        return 'skip'
+    if any(item['post_id'] == post_id for item in pending):
+        return 'skip'
 
     content = entry.get('content', [{}])[0].get('value', '') + ' ' + entry.get('summary', '')
 
@@ -165,29 +271,103 @@ async def process_entry(client, entry, seen_posts, seen_imdb):
         imdb_id = extract_imdb_id(url)
         if imdb_id and imdb_id in seen_imdb:
             seen_posts.add(post_id)
-            return False
+            return 'skip'
+
+        rt_score, imdb_rating, genre = await fetch_movie_info(
+            client, imdb_id, omdb_cache, omdb_semaphore
+        )
+
+        if post_id in seen_posts:
+            return 'skip'
 
         updated_parsed = entry.get('updated_parsed')
         date_obj = datetime.datetime(*updated_parsed[:6]) if updated_parsed else datetime.datetime.now()
-        rt_score, imdb_rating, genre = await fetch_movie_info(client, imdb_id)
         title = entry.get('title', 'No Title')
         date_str = date_obj.strftime('%Y-%m-%d')
+
+        if not save_seen_post(post_id, date_str, title, url, rt_score, imdb_rating, genre):
+            log.error("Not sending '%s': could not persist to seen file.", title)
+            return 'skip'
+        seen_posts.add(post_id)
+        if imdb_id:
+            seen_imdb.add(imdb_id)
+
         success = await send_telegram_message(
+            client,
             title,
             date_obj,
             url,
             rt_score,
             imdb_rating,
-            genre
+            genre,
         )
         if success:
-            save_seen_post(post_id, date_str, title, url, rt_score, imdb_rating, genre)
-            seen_posts.add(post_id)
+            return 'sent'
+        pending.append({
+            'post_id': post_id,
+            'date_str': date_str,
+            'title': title,
+            'url': url,
+            'rt_score': rt_score,
+            'imdb_rating': imdb_rating,
+            'genre': genre,
+            'attempts': 1,
+        })
+        save_pending(pending)
+        return 'queued'
+    return 'skip'
+
+
+async def retry_pending(client, seen_posts, seen_imdb, pending):
+    if not pending:
+        return 0
+    log.info("Retrying %d pending post(s)...", len(pending))
+    still_pending = []
+    sent_count = 0
+    for item in pending:
+        date_obj = datetime.datetime.strptime(item['date_str'], '%Y-%m-%d')
+        success = await send_telegram_message(
+            client,
+            item['title'],
+            date_obj,
+            item['url'],
+            item.get('rt_score'),
+            item.get('imdb_rating'),
+            item.get('genre'),
+        )
+        if success:
+            seen_posts.add(item['post_id'])
+            imdb_id = extract_imdb_id(item['url'])
             if imdb_id:
                 seen_imdb.add(imdb_id)
-            return True
-        return False
-    return False
+            sent_count += 1
+        else:
+            item['attempts'] = item.get('attempts', 1) + 1
+            if item['attempts'] <= MAX_SEND_ATTEMPTS:
+                still_pending.append(item)
+            else:
+                log.error(
+                    "Giving up on '%s' after %d send attempts.",
+                    item['title'],
+                    MAX_SEND_ATTEMPTS,
+                )
+                seen_posts.add(item['post_id'])
+                imdb_id = extract_imdb_id(item['url'])
+                if imdb_id:
+                    seen_imdb.add(imdb_id)
+                save_seen_post(
+                    item['post_id'],
+                    item['date_str'],
+                    item['title'],
+                    item['url'],
+                    item.get('rt_score'),
+                    item.get('imdb_rating'),
+                    item.get('genre'),
+                )
+    pending[:] = still_pending
+    save_pending(pending)
+    return sent_count
+
 
 REDDIT_HEADERS = {
     'User-Agent': USER_AGENT,
@@ -200,9 +380,11 @@ FALLBACK_REDDIT_URLS = [
     'https://www.reddit.com/r/movieleaks/.rss',
 ]
 
+
 def _is_login_redirect(response):
     location = response.headers.get('location', '')
     return response.status_code in (301, 302, 303, 307, 308) and '/login/' in location
+
 
 async def fetch_reddit_rss(client):
     for attempt in range(5):
@@ -211,10 +393,14 @@ async def fetch_reddit_rss(client):
                 REDDIT_URL,
                 headers=REDDIT_HEADERS,
                 follow_redirects=False,
-                timeout=15.0
+                timeout=15.0,
             )
             if _is_login_redirect(response) or response.status_code == 403:
-                print(f"[WARN] {REDDIT_URL} returned {response.status_code}, trying fallback URLs...")
+                log.warning(
+                    "%s returned %s, trying fallback URLs...",
+                    REDDIT_URL,
+                    response.status_code,
+                )
                 for url in FALLBACK_REDDIT_URLS:
                     if url == REDDIT_URL:
                         continue
@@ -222,10 +408,10 @@ async def fetch_reddit_rss(client):
                         url,
                         headers=REDDIT_HEADERS,
                         follow_redirects=True,
-                        timeout=15.0
+                        timeout=15.0,
                     )
                     if not _is_login_redirect(fallback) and fallback.status_code == 200:
-                        print(f"[INFO] Using fallback feed: {url}")
+                        log.info("Using fallback feed: %s", url)
                         feed = feedparser.parse(fallback.text)
                         return feed.entries
             response.raise_for_status()
@@ -234,42 +420,120 @@ async def fetch_reddit_rss(client):
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 429:
                 wait = 2 ** (attempt + 4) + random.randint(0, 60)
-                print(f"[WARN] Reddit rate limited (429). Attempt {attempt+1}/5. Waiting {wait}s...")
+                log.warning(
+                    "Reddit rate limited (429). Attempt %d/5. Waiting %ds...",
+                    attempt + 1,
+                    wait,
+                )
                 await asyncio.sleep(wait)
             else:
-                print(f"[ERROR] Failed to fetch RSS: {e}")
-                return []
+                log.error("Failed to fetch RSS: %s", e)
+                return None
         except Exception as e:
-            print(f"[ERROR] Failed to fetch RSS: {e}")
-            return []
-    print(f"[ERROR] Reddit RSS still rate limited after 5 attempts.")
-    return []
+            log.error("Failed to fetch RSS: %s", e)
+            return None
+    log.error("Reddit RSS still rate limited after 5 attempts.")
+    return None
+
 
 async def main():
-    print("[INFO] Starting Movie News Bot (v2 - full overhaul)...")
+    validate_env()
+    log.info("Starting Movie News Bot (v4 - async, cached, alerting)...")
     seen_posts, seen_imdb = load_seen_data()
-    print(f"[INFO] Loaded {len(seen_posts)} seen posts, {len(seen_imdb)} unique movies")
+    log.info("Loaded %d seen posts, %d unique movies", len(seen_posts), len(seen_imdb))
+
+    consecutive_failures = 0
+    last_heartbeat = time.monotonic()
+    posts_since_heartbeat = 0
+    alerts_sent = 0
+    pending = load_pending()
+    omdb_cache = load_omdb_cache()
+    omdb_semaphore = asyncio.Semaphore(OMDB_CONCURRENCY)
+    if pending:
+        log.info("Loaded %d pending post(s) from queue.", len(pending))
+    if omdb_cache:
+        log.info("Loaded %d cached movie info entries.", len(omdb_cache))
 
     async with httpx.AsyncClient() as client:
         while True:
             try:
+                sent_from_queue = await retry_pending(client, seen_posts, seen_imdb, pending)
+                if sent_from_queue:
+                    posts_since_heartbeat += sent_from_queue
+
                 entries = await fetch_reddit_rss(client)
-                new_count = 0
-                for entry in entries:
-                    if await process_entry(client, entry, seen_posts, seen_imdb):
-                        new_count += 1
 
-                if new_count == 0:
-                    print(f"[INFO] No new posts found ({len(entries)} in feed). Checking again in 30 minutes...")
+                if entries is None:
+                    consecutive_failures += 1
+                    log.warning("Feed fetch failed (%d consecutive).", consecutive_failures)
+                    if consecutive_failures == CONSECUTIVE_FAILURE_ALERT:
+                        await send_status_message(
+                            client,
+                            f"⚠️ Movie bot alert: Reddit feed failed {consecutive_failures} "
+                            f"times in a row. The bot may be down or Reddit is blocking it.",
+                        )
+                        alerts_sent += 1
                 else:
-                    print(f"[INFO] Posted {new_count} new movie(s). Checking again in 30 minutes...")
+                    consecutive_failures = 0
+                    tasks = [
+                        process_entry(
+                            client, entry, seen_posts, seen_imdb, pending,
+                            omdb_cache, omdb_semaphore,
+                        )
+                        for entry in entries
+                    ]
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    new_count = 0
+                    for result in results:
+                        if isinstance(result, Exception):
+                            log.error("Error processing entry: %s", result)
+                        elif result == 'sent':
+                            new_count += 1
+                            posts_since_heartbeat += 1
 
-                await asyncio.sleep(1800)
+                    if new_count == 0:
+                        log.info(
+                            "No new posts found (%d in feed). Checking again in %ds...",
+                            len(entries),
+                            POLL_INTERVAL,
+                        )
+                    else:
+                        log.info(
+                            "Posted %d new movie(s). Checking again in %ds...",
+                            new_count,
+                            POLL_INTERVAL,
+                        )
+
+                if time.monotonic() - last_heartbeat >= HEARTBEAT_INTERVAL:
+                    hours = HEARTBEAT_INTERVAL // 3600
+                    status = "✅" if consecutive_failures == 0 else "⚠️"
+                    await send_status_message(
+                        client,
+                        f"{status} Movie bot alive.\n"
+                        f"📨 {posts_since_heartbeat} movie(s) posted in the last {hours}h.\n"
+                        f"🚨 {alerts_sent} alert(s) triggered.\n"
+                        f"🗂 {len(seen_posts)} posts tracked total.",
+                    )
+                    last_heartbeat = time.monotonic()
+                    posts_since_heartbeat = 0
+                    alerts_sent = 0
+
+                await asyncio.sleep(POLL_INTERVAL)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                print(f"[ERROR] Main loop error: {e}")
+                log.error("Main loop error: %s", e)
+                consecutive_failures += 1
+                if consecutive_failures == CONSECUTIVE_FAILURE_ALERT:
+                    await send_status_message(
+                        client,
+                        f"⚠️ Movie bot alert: main loop errored {consecutive_failures} times in a row.",
+                    )
                 await asyncio.sleep(60)
 
+
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log.info("Shutting down.")

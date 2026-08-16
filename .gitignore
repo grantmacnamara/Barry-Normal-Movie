@@ -20,6 +20,8 @@ build/
 
 # Local data files
 seen_posts.txt
+pending_posts.json
+omdb_cache.json
 
 # Generated output
 out.txt

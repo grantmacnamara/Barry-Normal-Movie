@@ -1,7 +1,4 @@
-python-telegram-bot
-movieposters
-BeautifulSoup4
 urlextract
-requests
-Pillow
+httpx
+feedparser
 python-dotenv

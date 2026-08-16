@@ -5,8 +5,10 @@ A Python-based bot that automatically aggregates movie news from Reddit and post
 ## Features
 
 - 🤖 Automated content aggregation from Reddit
-- 📱 Posting to Telegram
+- 📱 Posting to Telegram (with Rotten Tomatoes / IMDb ratings and genres)
 - 🔄 Duplicate post prevention
+- 💾 Failed-send retry queue and offline cache
+- 📊 Health heartbeats and failure alerts
 - ⚡ Real-time updates
 - 🔒 Secure credential management
 - 📝 Post history tracking
@@ -29,8 +31,8 @@ A Python-based bot that automatically aggregates movie news from Reddit and post
 
 2. Create and activate a virtual environment:
    ```bash
-   python -m venv venv
-   source venv/bin/activate
+   python -m venv .venv
+   source .venv/bin/activate
    ```
 
 3. Install required dependencies:
@@ -45,9 +47,15 @@ A Python-based bot that automatically aggregates movie news from Reddit and post
    GROUP_CHAT_ID=your_group_chat_id
 
    # Reddit Settings
-   REDDIT_URL=https://www.reddit.com/r/movieleaks.json
+   REDDIT_URL=https://www.reddit.com/r/movieleaks.rss
 
-    
+   # OMDB (ratings & genres) - free key from https://www.omdbapi.com/apikey.aspx
+   OMDB_API_KEY=your_omdb_api_key
+
+   # Optional - chat for alerts/heartbeats (defaults to GROUP_CHAT_ID)
+   ALERT_CHAT_ID=your_alert_chat_id
+   ```
+
 5. Install PM2 globally and set up the process:
    ```bash
    npm install -g pm2
@@ -106,6 +114,10 @@ The bot will:
 | BOT_TOKEN | Telegram bot API token | `your_telegram_bot_token` |
 | GROUP_CHAT_ID | Telegram group/channel ID | `your_group_chat_id` |
 | REDDIT_URL | Reddit RSS feed URL | `https://www.reddit.com/r/movieleaks.rss` |
+| OMDB_API_KEY | OMDB API key for ratings/genres | `your_omdb_api_key` |
+| ALERT_CHAT_ID | Chat for alerts/heartbeats (defaults to GROUP_CHAT_ID) | `your_alert_chat_id` |
+| POLL_INTERVAL | Seconds between feed checks (default `1800`) | `1800` |
+| HEARTBEAT_INTERVAL | Seconds between status heartbeats (default `86400`) | `86400` |
 
 
 ## File Structure
@@ -116,7 +128,10 @@ movie-news-bot/
 ├── requirements.txt    # Python dependencies
 ├── .env               # Environment variables
 ├── .gitignore         # Git ignore rules
-└── seen_posts.txt     # Tracking file for posted content
+├── start.sh           # Wrapper that restarts the bot on crash
+├── seen_posts.txt     # Tracking file for posted content
+├── pending_posts.json # Retry queue for failed sends
+└── omdb_cache.json    # Cached ratings/genres (saves OMDB API quota)
 ```
 
 ## Contributing
@@ -155,7 +170,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Acknowledgments
 
 - Reddit API
-- python-telegram-bot
+- OMDB API
+- httpx
 - Python dotenv
 
 
