@@ -169,6 +169,10 @@ def save_omdb_cache(cache):
         log.warning("Failed to save OMDB cache: %s", e)
 
 
+def clean_title(title):
+    return re.sub(r'\s*\(admin\)\s*', '', title, flags=re.IGNORECASE).strip()
+
+
 def is_valid_movie_url(text):
     for url in URL_EXTRACTOR.find_urls(text):
         if 'imdb.com' in url:
@@ -236,7 +240,7 @@ async def send_telegram_message(client, title, date, url, rt_score=None, imdb_ra
             CHAT_ID,
             message,
             parse_mode='HTML',
-            disable_web_page_preview=True,
+            disable_web_page_preview=False,
         )
         log.info("Sent: %s", title)
         return True
@@ -282,7 +286,7 @@ async def process_entry(client, entry, seen_posts, seen_imdb, pending, omdb_cach
 
         updated_parsed = entry.get('updated_parsed')
         date_obj = datetime.datetime(*updated_parsed[:6]) if updated_parsed else datetime.datetime.now()
-        title = entry.get('title', 'No Title')
+        title = clean_title(entry.get('title', 'No Title'))
         date_str = date_obj.strftime('%Y-%m-%d')
 
         if not save_seen_post(post_id, date_str, title, url, rt_score, imdb_rating, genre):
